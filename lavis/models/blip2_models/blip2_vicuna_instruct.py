@@ -258,6 +258,9 @@ class Blip2VicunaInstruct(Blip2Base):
         length_penalty=1,
         num_captions=1,
         temperature=1,
+        images_cd=None,
+        cd_beta=None,
+        cd_alpha=None
     ):
         self.llm_tokenizer.padding_side = "left"
 
