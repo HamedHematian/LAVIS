@@ -331,6 +331,11 @@ class Blip2VicunaInstruct(Blip2Base):
                 image_embeds = self.ln_vision(self.visual_encoder(image))
             image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(image.device)
 
+            if images_cd is not None:
+                with self.maybe_autocast():
+                    image_embeds_cd = self.ln_vision(self.visual_encoder(images_cd))
+                image_atts_cd = torch.ones(image_embeds_cd.size()[:-1], dtype=torch.long).to(image.device)
+
             if self.qformer_text_input:
                 query_output = self.Qformer.bert(
                     text_Qformer.input_ids,
@@ -340,6 +345,17 @@ class Blip2VicunaInstruct(Blip2Base):
                     encoder_attention_mask=image_atts,
                     return_dict=True,
                 )
+
+                ## cd_comments: input Qformer 
+                if images_cd is not None:
+                    query_output_cd = self.Qformer.bert(
+                        text_Qformer.input_ids,
+                        attention_mask=Qformer_atts,
+                        query_embeds=query_tokens,
+                        encoder_hidden_states=image_embeds_cd,
+                        encoder_attention_mask=image_atts_cd,
+                        return_dict=True,
+                    )
             else:
                 query_output = self.Qformer.bert(
                     query_embeds=query_tokens,
@@ -350,6 +366,10 @@ class Blip2VicunaInstruct(Blip2Base):
 
             inputs_llm = self.llm_proj(query_output.last_hidden_state[:,:query_tokens.size(1),:])
             atts_llm = torch.ones(inputs_llm.size()[:-1], dtype=torch.long).to(image.device)
+            ## cd_comments: for generate
+            if images_cd is not None:
+                inputs_llm_cd = self.llm_proj(query_output_cd.last_hidden_state[:,:query_tokens.size(1),:])
+                atts_llm_cd = torch.ones(inputs_llm_cd.size()[:-1], dtype=torch.long).to(image.device)
 
         llm_tokens = self.llm_tokenizer(
             prompt,
@@ -361,6 +381,12 @@ class Blip2VicunaInstruct(Blip2Base):
             inputs_embeds = self.llm_model.get_input_embeddings()(llm_tokens.input_ids)
             inputs_embeds = torch.cat([inputs_llm, inputs_embeds], dim=1)
             attention_mask = torch.cat([atts_llm, llm_tokens.attention_mask], dim=1)
+
+            ## cd_comments: format
+            if images_cd is not None:
+                inputs_embeds_cd = self.llm_model.get_input_embeddings()(llm_tokens.input_ids)
+                inputs_embeds_cd = torch.cat([inputs_llm_cd, inputs_embeds_cd], dim=1)
+                attention_mask_cd = torch.cat([atts_llm_cd, llm_tokens.attention_mask], dim=1)
 
             outputs = self.llm_model.generate(
                 inputs_embeds=inputs_embeds,
@@ -375,6 +401,9 @@ class Blip2VicunaInstruct(Blip2Base):
                 repetition_penalty=repetition_penalty,
                 length_penalty=length_penalty,
                 num_return_sequences=num_captions,
+                images_cd=inputs_embeds_cd if images_cd is not None else None,
+                cd_beta=cd_beta if cd_beta is not None else None,
+                cd_alpha=cd_alpha if cd_alpha is not None else None
             )
 
         outputs[outputs == 0] = 2 # convert output id 0 to 2 (eos_token_id)
